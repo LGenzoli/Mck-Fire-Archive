@@ -917,7 +917,7 @@ met.mle.final <- met.mle.QA%>%
         ER, ER.lower, ER.upper, NEP, K600.daily, SV.cms),
       ~ round(.x, 1)))%>%
    mutate(across(c(z, turb_min, turb_median, turb_max), ~ round(.x, 2)))%>%
-  mutate(across(c(GHI.day,), ~ round(.x, 0)))%>%
+  mutate(across(c(GHI.day), ~ round(.x, 0)))%>%
   mutate(across(c(min.DO), ~ round(.x, 3)))
 
 ```
@@ -928,7 +928,7 @@ met.mle.final <- met.mle.QA%>%
 
 ```{r, warning=F, Echo = F, size = 'small', fig.align="center", fig.width=7, fig.height=4}
 
-write.csv(met.mle.final, "Data/met_mle_final.csv")
+#write.csv(met.mle.final, "Data/met_mle_final.csv")
 
 ``` 
 
