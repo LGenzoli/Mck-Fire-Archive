@@ -1,0 +1,300 @@
+---
+title: 'Mckinney Fire Metabolism: Depth Model'
+author: "Laurel Genzoli"
+date: "2025-07-31"
+format:
+  html:
+    self-contained: true
+    fig-align: center
+    theme: united
+    highlight: tango
+    number-sections: true
+  pdf:
+    pdf-engine: xelatex
+    number-sections: true
+    toc: true
+    fig-align: center
+    keep-tex: true
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+  
+```{=html}
+<style type="text/css">
+body, td {font-size: 12px;}
+code.r{font-size: 8px;}
+pre {font-size: 10px}
+</style>
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = F, message = F)
+knitr::opts_knit$set(root.dir = '/Users/laurelgenzoli/Dropbox/2024_Projects/Mckinney_Fire_Metab/Mck-Fire-Metab-GH')
+def.chunk.hook  <- knitr::knit_hooks$get("chunk")
+knitr::knit_hooks$set(chunk = function(x, options) {
+  x <- def.chunk.hook(x, options)
+  ifelse(options$size != "normalsize", paste0("\n \\", options$size,"\n\n", x, "\n\n \\normalsize"), x)
+})
+
+```
+
+
+# Script Descriptioins
+
+This script creates a depth model for the Seiad Valley reach of the Klamath River. Using data from the Bradley Model and the Yurok Tribe Topo LiDAR data, we obtain depth measurements from throughout the river by calculating the difference between bed and water elevation across the full range of flows explored in Bradly model. We fit a power relationship between depth and flow and then used this model to estimate mean reach depth daily based on mean daily discharge in the metabolism data set. Scaling metabolism to depth was done as a final step in them "metab_QA" script.
+
+
+## Packages & Data
+```{r, echo = T, message = F}
+setwd('/Users/laurelgenzoli/Dropbox/2024_Projects/Mckinney_Fire_Metab/Mck-Fire-Metab-GH')
+
+library(brms)
+library(loo)
+library(tidybayes)
+library(tidyverse)
+library(ggplot2)
+library(fs)
+library(cowplot)
+
+```
+
+### Load dense mesh data (lower flows)
+
+The Bradley model used a dense mesh at the lower flows for modeling bed and water surface elevations. 
+
+```{r, warning = F, echo = F,  fig.width = 8, fig.height = 6}
+
+## read in WSEs
+ WSE <- dir_ls("Data/Depth/LongProfiles/DenseMesh")%>%
+  map_dfr(read.table, .id = "source", header = T, sep = ",")%>%
+  mutate(ex.prob = substr(source, 35, 36))%>%
+  mutate(el.type = substr(source,  65, 66))%>%
+  mutate(el.type = case_when(el.type %in% c( "Be", "_B") ~"Bed",
+                               el.type %in% c("WS", "_W") ~ "WSE"))%>%
+  dplyr::select(-source)%>%
+  filter(el.type == "WSE")%>%
+  rename(WSE = "el.type")%>%
+  rename(WSE.el = "Elevation")
+
+
+## Read in Bed elev. 
+Bed <- dir_ls("Data/Depth/LongProfiles/DenseMesh")%>%
+  map_dfr(read.table, .id = "source", header = T, sep = ",")%>%
+  mutate(ex.prob = substr(source, 35, 36))%>%
+  mutate(el.type = substr(source, 65, 66))%>%
+  mutate(el.type = ifelse(el.type %in% c("Be", "_B"), "Bed", "WSE"))%>%
+  dplyr::select(-source)%>%
+  filter(el.type == "Bed")%>%
+  rename(Bed = "el.type")%>%
+  rename(Bed.el = "Elevation")
+  
+
+## Join Bed with WSE to calc depth 
+  depth.low <- Bed %>% 
+  left_join(WSE, by = c("Station", "ex.prob"))%>%
+  mutate(z = WSE.el - Bed.el)%>%
+  dplyr::select(Station, z, ex.prob)%>%
+  mutate(ex.prob = case_when(ex.prob == 10 ~ "10_Percent",
+                             ex.prob == 25 ~ "25_Percent",
+                             ex.prob == 50 ~ "50_Percent",
+                             ex.prob == 75 ~ "75_Percent"))
+
+  
+  depth.low%>%
+    filter(Station > 128 & Station < 134.2)%>%
+    filter(ex.prob == "10_Percent")%>%
+    summarize(z = mean(z, na.rm = T))
+
+```
+
+### Read in coarse mesh (higher flows)
+
+Only coarse mesh data was available for the higher flow (flood) data
+
+```{r, warning = F, echo = F,  fig.width = 8, fig.height = 6}
+
+## read in WSEs
+ WSE <- dir_ls("Data/Depth/LongProfiles/LongProfiles")%>%
+  map_dfr(read.table, .id = "source", header = T, sep = ",")%>%
+  mutate(ex.prob = substr(source, 38, 38))%>%
+  mutate(el.type = substr(source,  60, 62))%>%
+  dplyr::select(-source)%>%
+  mutate(el.type = case_when(el.type %in% c( "Bed", "edP") ~"Bed",
+                               el.type %in% c("WSE", "SEP") ~ "WSE"))%>%
+  mutate(ex.prob = ifelse(ex.prob == 1, 10, ex.prob))%>%
+  filter(el.type == "WSE")%>%
+  rename(WSE = "el.type")%>%
+  rename(WSE.el = "Elevation")
+
+
+## Read in Bed elev
+Bed <- dir_ls("Data/Depth/LongProfiles/LongProfiles")%>%
+  map_dfr(read.table, .id = "source", header = T, sep = ",")%>%
+  mutate(ex.prob = substr(source, 38, 38))%>%
+  mutate(el.type = substr(source,  60, 62))%>%
+  dplyr::select(-source)%>%
+  mutate(el.type = case_when(el.type %in% c( "Bed", "edP") ~"Bed",
+                               el.type %in% c("WSE", "SEP") ~ "WSE"))%>%
+  mutate(ex.prob = ifelse(ex.prob == 1, 10, ex.prob))%>%
+  filter(el.type == "Bed")%>%
+  rename(Bed = "el.type")%>%
+  rename(Bed.el = "Elevation")
+  
+
+## Join Bed with WSE to calc depth 
+  depth.high <- Bed %>% 
+  left_join(WSE, by = c("Station", "ex.prob"))%>%
+  mutate(z = WSE.el - Bed.el)%>%
+  dplyr::select(Station, z, ex.prob)%>%
+  mutate(ex.prob = case_when(ex.prob == 10 ~ "10_YrFlood",
+                             ex.prob == 5 ~ "5_YrFlood",
+                             ex.prob == 2 ~ "2_YrFlood"))
+  
+```
+
+
+## Full data frame of depth estimates
+
+We use depth ranging from a 75% exceedance probability to a 10 year flood interval. Our metabolism data set spans discharge from 945 to 17,600 cfs, the higher end of which corresponds to a 2-year flood interval. 
+
+The flows for each exceedance probability/flood return interval are from Bradley 2021:
+``Bradley, N. D. 2021. Klamath River hydraulic model: Iron Gate Dam to the Pacific Ocean. U.S. Department of the Interior, Technical Report No. ENV-2021-066. U.S. Bureau of Reclamation"
+
+For the fine mesh we had >1900 estimates of depth and for coarse mesh, >800 within our 10-km reach length extending from the Seiad Sonde to 10-km upriver.
+
+Here, we average depths across the reach of each exceedance flow in the model, convert from standard units to metric, and also extract the depth extending 10 and 20 km upriver to be used as a quick sensitivey analysis for our choice of reach length (below).
+
+```{r, warning = F, echo = F,  fig.width = 8, fig.height = 6}
+
+depth <- bind_rows(depth.high, depth.low) %>%
+  mutate(z.m = z * 0.3048)%>%
+  mutate(ex.prob = factor(ex.prob, 
+  levels = c("75_Percent", "50_Percent", "25_Percent", "10_Percent",  
+             "2_YrFlood", "5_YrFlood", "10_YrFlood")))%>%
+  filter(Station > 128 & Station < 134.2)
+
+#depth %>% group_by(ex.prob)%>% summarise(z = length(z))
+
+
+depth.20k <- 
+  bind_rows(depth.high, depth.low) %>%
+  mutate(z.m = z * 0.3048)%>%
+  mutate(ex.prob = factor(ex.prob, 
+  levels = c("10_Percent", "25_Percent", "50_Percent", "75_Percent", 
+             "2_YrFlood", "5_YrFlood", "10_YrFlood")))%>%
+  filter(Station > 128 & Station < 140.4)
+
+
+depth.sum <- depth%>%
+  group_by(ex.prob)%>%
+  summarise(reach.z = mean(z.m, na.rm = T))%>%
+  mutate(ex.flow.cfs = case_when(ex.prob == "75_Percent" ~ 1320,
+                             ex.prob == "50_Percent" ~ 1870,
+                             ex.prob == "25_Percent" ~ 3400,
+                             ex.prob == "10_Percent" ~ 6800,
+                             ex.prob == "2_YrFlood" ~ 17600,
+                             ex.prob == "5_YrFlood" ~ 39960,
+                             ex.prob == "10_YrFlood"~ 56540))%>%
+  mutate(ex.prob = factor(ex.prob, 
+  levels = c("75_Percent", "50_Percent", "25_Percent", "10_Percent",  
+             "2_YrFlood", "5_YrFlood", "10_YrFlood")))%>%
+  mutate(ex.flow.cms = ex.flow.cfs * 0.0283168)
+
+depth.sum
+
+```
+
+
+### Depth distributions and depth-flow relationship
+
+
+```{r, warning = F, echo = F,  fig.width = 9, fig.height = 4}
+
+p1 <- ggplot(depth, aes(x = z.m, col = ex.prob, fill = ex.prob))+
+  geom_density(alpha = 0.2)+
+  scale_color_viridis_d(option = "mako")+
+  scale_fill_viridis_d(option = "mako")+
+  theme_classic()+
+  theme(legend.position = c(0.85, 0.7))
+
+
+p2 <- ggplot(depth.sum, aes(x = ex.flow.cms, y = reach.z))+
+  stat_smooth(col = "grey", se = F, method = "lm")+
+  geom_point(aes(col = ex.prob), size = 5, alpha = 0.8)+
+  scale_color_viridis_d(option = "mako")+
+  scale_x_log10()+
+  scale_y_log10()+
+  theme_classic()+
+  theme(legend.position = c(0.85, 0.31))
+  
+#pdf("Figures/Publication_Plots/SI_depth.pdf", height = 4, width = 8)
+
+plot_grid(p1, p2, rel_widths = c(0.55, 0.45))+
+  theme_classic()
+  
+
+#dev.off()
+
+```
+
+## Sensitvity analysis of reach length
+
+The choice of 10 vs. 20 km changes reach depths very little. There is some deviation of mean reach depth between the 10 and 20 km reach at flood flows, but our data set tops out at the flows of a 2-year flood, so we are using a 10 km reach length to estimates reach depths.
+
+
+```{r, warning = F, echo = F,  fig.width = 6, fig.height = 9, fig.align="center"}
+
+d <- depth %>% 
+  mutate(reach = "10k")%>%
+  bind_rows(depth.20k)%>%
+  mutate(reach = ifelse(is.na(reach), "20k", reach))
+  
+means <- d %>%
+  group_by(reach, ex.prob) %>%
+  summarise(mean_z = mean(z.m, na.rm = TRUE), .groups = "drop")
+
+ggplot(d, aes(x = z.m, col = reach, fill = reach)) +
+  geom_density(alpha = 0.2) +
+  geom_vline(data = means, aes(xintercept = mean_z, color = reach), 
+             linetype = "dashed") +
+  facet_wrap(~ex.prob, ncol = 1) +
+  scale_color_viridis_d(option = "mako", end = 0.1, begin = 0.8) +
+  scale_fill_viridis_d(option = "mako", end = 0.1, begin = 0.8) +
+  theme(legend.position = c(0.65, 0.96), 
+        legend.direction = "horizontal")+
+  theme_classic()
+
+  
+
+```
+
+
+
+## Final model for depth estimation
+
+This model will be used to estimate a daily mean reach depth, which is used to scale metabolism to aerial units daily with changing flow conditions. Metabolism is adjusted to depth in the "metab_QA" script.
+
+ $log(z) = -1.47 + log(Q) \times 0.45$
+ 
+ 
+```{r, warning = F, echo = F,  fig.width = 4, fig.height = 9}
+
+
+mod <- lm(log(reach.z) ~ log(ex.flow.cms), data = depth.sum)
+
+summary(mod)
+
+## this is my equation to use in the metabolism-out script
+
+## z <- exp(-1.47 + 0.45 * log(Q))
+
+```
+
+
+
+
+
+
+

@@ -1,0 +1,415 @@
+---
+title: 'McKinney Fire metabolism: Time series model + breakpoint model'
+author: "Laurel Genzoli"
+date: "2026-02-23"
+format:
+  html:
+    self-contained: true
+    fig-align: center
+    theme: united
+    highlight: tango
+    number-sections: true
+  pdf:
+    pdf-engine: xelatex
+    number-sections: true
+    toc: true
+    fig-align: center
+    keep-tex: true
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{=html}
+<style type="text/css">
+body, td {font-size: 12px;}
+code.r{font-size: 8px;}
+pre {font-size: 10px}
+</style>
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = F, message = F)
+knitr::opts_knit$set(root.dir = '/Users/laurelgenzoli/Dropbox/2024_Projects/Mckinney_Fire_Metab/Mck-Fire-Metab-GH')
+def.chunk.hook  <- knitr::knit_hooks$get("chunk")
+knitr::knit_hooks$set(chunk = function(x, options) {
+  x <- def.chunk.hook(x, options)
+  ifelse(options$size != "normalsize", paste0("\n \\", options$size,"\n\n", x, "\n\n \\normalsize"), x)
+})
+
+```
+
+# Script description
+
+This script contains the time series model testing the effects of the McKinney Fire on stream metabolism, turbidity, light, and discharge.  
+
+
+### Packages
+```{r, echo = T, message = F}
+setwd('/Users/laurelgenzoli/Dropbox/2024_Projects/Mckinney_Fire_Metab/Mck-Fire-Metab-GH')
+
+
+library(lubridate)
+library(dataRetrieval)
+library(viridis)
+library(cowplot)
+library(ggpubr)
+library(streamMetabolizer)
+library(hms)
+library(plotly)
+library(scales)
+library(data.table)
+library(zoo)
+library(nlme)
+library(tidyverse)
+library(brms)
+library(tidybayes)
+library(segmented)
+
+theme_set(theme_classic())
+```
+
+### Load data
+```{r, echo = T, message = F}
+met.mle.final <- read_csv("Data/met_mle_final.csv") %>%
+ mutate(year = as.factor(year),
+         fire = ifelse(date > "2022-08-02", "after", "before"))%>%
+  mutate(GPP = ifelse(QA.code == 1, NA, GPP))%>%
+  mutate(GPP.upper = ifelse(QA.code == 1, NA, GPP.upper))%>%
+  mutate(GPP.lower = ifelse(QA.code == 1, NA, GPP.lower))%>%
+  mutate(ER = ifelse(QA.code %in% c(1,2), NA, ER))%>%
+  mutate(ER.upper = ifelse(QA.code %in% c(1,2), NA, ER.upper))%>%
+  mutate(ER.lower = ifelse(QA.code %in% c(1,2), NA, ER.lower))%>%
+  mutate(NEP = ifelse(is.na(ER), NA, NEP))%>%
+  dplyr::select(-1)
+
+names(met.mle.final)
+```
+
+# Bayes version of interrupted time series
+
+This is a more robust test of change following the fire than a simple comparison of means because it incorporates the autocorrelation and seasonality of the time series. The intercept change at the event is obvious to our eyes, but it is nice to have a statistical test behind it, and a better estimate of the magnitude of change. 
+
+
+## Prep data set for model
+
+```{r, warning=F, size = 'small', echo=FALSE, fig.width=8, fig.height=5}
+
+ts_data<- met.mle.final %>%
+  mutate(t = as.numeric(date - min(date)),  # time index
+    event = ifelse(fire == "before", 0, 1),  
+    time_after_event = ifelse(event == 1, t - min(t[event==1]), 0), #slope change after event
+    sin1 = sin(2*pi*jday/365.25),
+    cos1 = cos(2*pi*jday/365.25))%>% #harmonic ex (pair captures annual cycle)
+    dplyr::select(t, event, time_after_event, mon, sin1, cos1, turb_median, SV.cms, GHI.day, GPP, ER, NEP)
+```   
+
+
+## Fit the model with AR(1): Formula defined in code below
+
+```{r, results = 'hide', warning=F, size = 'small', echo=FALSE, fig.width=8, fig.height=5}
+fit.q <- brm(formula = bf(SV.cms ~ t + event  + sin1 + cos1),
+  data = ts_data,
+  family = gaussian(),
+  autocor = cor_ar(~ t, p = 1),  
+  chains = 4, cores = 4, iter = 1000,
+  control = list(adapt_delta = 0.95))
+
+fit.l <- brm(formula = bf(GHI.day ~ t + event + sin1 + cos1),
+  data = ts_data,
+  family = gaussian(),
+  autocor = cor_ar(~ t, p = 1),  
+  chains = 4, cores = 4, iter = 1000,
+  control = list(adapt_delta = 0.95))
+
+fit.turb <- brm(formula = bf(turb_median ~ t + event +  sin1 + cos1),
+  data = ts_data,
+  family = gaussian(),
+  autocor = cor_ar(~ t, p = 1),  
+  chains = 4, cores = 4, iter = 1000,
+  control = list(adapt_delta = 0.95))
+
+fit.gpp <- brm(formula = bf(GPP ~ t + event + sin1 + cos1),
+  data = ts_data,
+  family = gaussian(),
+  autocor = cor_ar(~ t, p = 1), 
+  chains = 4, cores = 4, iter = 1000,
+  control = list(adapt_delta = 0.95))
+
+fit.er <- brm(formula = bf(ER ~ t + event  + sin1 + cos1),
+  data = ts_data,
+  family = gaussian(),
+  autocor = cor_ar(~ t, p = 1), 
+  chains = 4, cores = 4, iter = 1000,
+  control = list(adapt_delta = 0.95))
+
+fit.nep <- brm(formula = bf(NEP ~ t + event  + sin1 + cos1),
+  data = ts_data,
+  family = gaussian(),
+  autocor = cor_ar(~ t, p = 1),  
+  chains = 4, cores = 4, iter = 1000,
+  control = list(adapt_delta = 0.95))
+```
+
+
+## Inspect posterior summaries
+
+
+```{r, warning=F, size = 'small', echo=FALSE, fig.width=8, fig.height=5}
+
+summary(fit.q)
+summary(fit.l)
+summary(fit.turb)
+summary(fit.gpp)
+summary(fit.er)
+summary(fit.nep)
+
+
+psq <- posterior_summary(fit.q)
+psl <-posterior_summary(fit.l)
+pst <-posterior_summary(fit.turb)
+psg <-posterior_summary(fit.gpp)
+pse <-posterior_summary(fit.er)
+psn <-posterior_summary(fit.nep)
+
+fits <- list(psq, psl, pst, psg, pse, psn)
+
+
+
+```
+
+
+
+## Extract means pre/post fire for text and plots
+   
+    - These are means while holding season and trend stable
+    - Time trend is average, but sin and cos are arbitrarily set to 0
+    - This is data used in figure 2, right panels
+
+```{r, warning=F, size = 'small', echo=FALSE, fig.width=8, fig.height=5}
+
+df.l <- tibble(event = c(0,1),t = mean(ts_data$t), sin1 = 0, cos1 = 0) %>%
+  rowwise() %>%
+  mutate(pred = list(posterior_epred(fit.l, newdata = cur_data()))) %>%
+  mutate(mean = mean(unlist(pred)),
+         lower = quantile(unlist(pred), 0.025),
+         upper = quantile(unlist(pred), 0.975),
+         group = ifelse(event==0,"Before","After")) %>%
+  dplyr::select(group, mean, lower, upper)
+
+df.q <- 
+  tibble(event = c(0,1),t = mean(ts_data$t),sin1 = 0, cos1 = 0) %>%
+  rowwise() %>%
+  mutate(pred = list(posterior_epred(fit.q, newdata = cur_data()))) %>%
+  mutate(mean = mean(unlist(pred)),
+         lower = quantile(unlist(pred), 0.025),
+         upper = quantile(unlist(pred), 0.975),
+         group = ifelse(event==0,"Before","After")) %>%
+  dplyr::select(group, mean, lower, upper)
+
+df.t <- 
+  tibble(event = c(0,1),t = mean(ts_data$t),sin1 = 0, cos1 = 0) %>%
+  rowwise() %>%
+  mutate(pred = list(posterior_epred(fit.turb, newdata = cur_data()))) %>%
+  mutate(mean = mean(unlist(pred)),
+         lower = quantile(unlist(pred), 0.025),
+         upper = quantile(unlist(pred), 0.975),
+         group = ifelse(event==0,"Before","After")) %>%
+  dplyr::select(group, mean, lower, upper)
+
+df.g <- 
+  tibble(event = c(0,1),t = mean(ts_data$t),sin1 = 0, cos1 = 0) %>%
+  rowwise() %>%
+  mutate(pred = list(posterior_epred(fit.gpp, newdata = cur_data()))) %>%
+  mutate(mean = mean(unlist(pred)),
+         lower = quantile(unlist(pred), 0.025),
+         upper = quantile(unlist(pred), 0.975),
+         group = ifelse(event==0,"Before","After")) %>%
+  dplyr::select(group, mean, lower, upper)
+
+df.e <- 
+  tibble(event = c(0,1),t = mean(ts_data$t),sin1 = 0, cos1 = 0) %>%
+  rowwise() %>%
+  mutate(pred = list(posterior_epred(fit.er, newdata = cur_data()))) %>%
+  mutate(mean = mean(unlist(pred)),
+         lower = quantile(unlist(pred), 0.025),
+         upper = quantile(unlist(pred), 0.975),
+         group = ifelse(event==0,"Before","After")) %>%
+  dplyr::select(group, mean, lower, upper)
+
+df.n <- 
+  tibble(event = c(0,1),t = mean(ts_data$t),sin1 = 0, cos1 = 0) %>%
+  rowwise() %>%
+  mutate(pred = list(posterior_epred(fit.nep, newdata = cur_data()))) %>%
+  mutate(mean = mean(unlist(pred)),
+         lower = quantile(unlist(pred), 0.025),
+         upper = quantile(unlist(pred), 0.975),
+         group = ifelse(event==0,"Before","After")) %>%
+  dplyr::select(group, mean, lower, upper)
+
+```
+
+
+
+
+
+## Means to report in text (make a table)
+    
+    - Essentially, prediction of each day, added up across time series
+    - This incorporates seasonality and trend into means estimates
+
+```{r, warning=F, size = 'small', echo=FALSE, fig.width=8, fig.height=5}
+before_df <- ts_data %>% filter(event == 0)
+after_df  <- ts_data %>% filter(event == 1)
+
+pred_b <- posterior_epred(fit.q, newdata = before_df)
+pred_a <- posterior_epred(fit.q, newdata = after_df)
+m.q <- tibble(group = c("Before","After"),
+  mean  = c(mean(pred_b), mean(pred_a)),
+  lower = c(quantile(pred_b,0.025), quantile(pred_a,0.025)),
+  upper = c(quantile(pred_b,0.975), quantile(pred_a,0.975)))%>%
+  mutate(param = "flow")
+
+
+pred_b <- posterior_epred(fit.l, newdata = before_df)
+pred_a <- posterior_epred(fit.l, newdata = after_df)
+m.l <- tibble(group = c("Before","After"),
+  mean  = c(mean(pred_b), mean(pred_a)),
+  lower = c(quantile(pred_b,0.025), quantile(pred_a,0.025)),
+  upper = c(quantile(pred_b,0.975), quantile(pred_a,0.975)))%>%
+  mutate(param = "light")
+
+pred_b <- posterior_epred(fit.turb, newdata = before_df)
+pred_a <- posterior_epred(fit.turb, newdata = after_df)
+m.t <- tibble(group = c("Before","After"),
+  mean  = c(mean(pred_b), mean(pred_a)),
+  lower = c(quantile(pred_b,0.025), quantile(pred_a,0.025)),
+  upper = c(quantile(pred_b,0.975), quantile(pred_a,0.975)))%>%
+  mutate(param = "turb")
+
+pred_b <- posterior_epred(fit.gpp, newdata = before_df)
+pred_a <- posterior_epred(fit.gpp, newdata = after_df)
+m.g <- tibble(group = c("Before","After"),
+  mean  = c(mean(pred_b), mean(pred_a)),
+  lower = c(quantile(pred_b,0.025), quantile(pred_a,0.025)),
+  upper = c(quantile(pred_b,0.975), quantile(pred_a,0.975)))%>%
+  mutate(param = "gpp")
+
+pred_b <- posterior_epred(fit.er, newdata = before_df)
+pred_a <- posterior_epred(fit.er, newdata = after_df)
+m.e <- tibble(group = c("Before","After"),
+  mean  = c(mean(pred_b), mean(pred_a)),
+  lower = c(quantile(pred_b,0.025), quantile(pred_a,0.025)),
+  upper = c(quantile(pred_b,0.975), quantile(pred_a,0.975)))%>%
+  mutate(param = "er")
+
+pred_b <- posterior_epred(fit.nep, newdata = before_df)
+pred_a <- posterior_epred(fit.nep, newdata = after_df)
+m.n <- tibble(group = c("Before","After"),
+  mean  = c(mean(pred_b), mean(pred_a)),
+  lower = c(quantile(pred_b,0.025), quantile(pred_a,0.025)),
+  upper = c(quantile(pred_b,0.975), quantile(pred_a,0.975)))%>%
+  mutate(param = "nep")
+
+bind_rows(m.l, m.q, m.t, m.g, m.e, m.n)
+```
+
+
+
+## Plot fitted values vs. observed
+
+
+```{r, warning=F, size = 'small', echo=FALSE, fig.width=8, fig.height=10}
+
+ts_data$fitted.turb  <- fitted(fit.turb, newdata = ts_data, re_formula = NA)[, "Estimate"]
+ts_data$fitted.gpp   <- fitted(fit.gpp, newdata = ts_data, re_formula = NA)[, "Estimate"]
+ts_data$fitted.er <- fitted(fit.er, newdata = ts_data, re_formula = NA)[, "Estimate"]
+ts_data$fitted.nep   <- fitted(fit.nep, newdata = ts_data, re_formula = NA)[, "Estimate"]
+
+
+t <- ggplot(ts_data, aes(x = t)) +
+  geom_line(aes(y = turb_median), color = "grey60") +
+  geom_line(aes(y = fitted.turb), color = "red", lwd = 0.3) +
+  geom_vline(xintercept = 1540, linetype = "dashed", color = "orange", lwd = 1.2) +
+  labs(y = "Turbidity",
+    x = "Time",
+    title = "Interrupted Time Series with Seasonality & AR(1)")
+
+g <- ggplot(ts_data, aes(x = t)) +
+  geom_line(aes(y = GPP), color = "grey60") +
+  geom_line(aes(y = fitted.gpp), color = "red", lwd = 0.3) +
+  geom_vline(xintercept = 1540, linetype = "dashed", color = "orange", lwd = 1.2) +
+  labs(y = "GPP",
+    x = "Time",
+    title = "Interrupted Time Series with Seasonality & AR(1)")
+
+r <- ggplot(ts_data, aes(x = t)) +
+  geom_line(aes(y = ER), color = "grey60") +
+  geom_line(aes(y = fitted.er), color = "red", lwd = 0.3) +
+  geom_vline(xintercept = 1540, linetype = "dashed", color = "orange", lwd = 1.2) +
+  labs(y = "ER",
+    x = "Time")
+
+n <- ggplot(ts_data, aes(x = t)) +
+  geom_line(aes(y = NEP), color = "grey60") +
+  geom_line(aes(y = fitted.nep), color = "red", lwd = 0.3) +
+  geom_vline(xintercept = 1540, linetype = "dashed", color = "orange", lwd = 1.2) +
+  labs(y = "NEP",
+    x = "Time")
+
+plot_grid(t, g, r, n, ncol = 1)
+
+```
+
+
+
+
+
+# A GLM with a turbidity breakpoint for dissolved oxygen response
+
+- phi = 0, including autocorrelation did not help so using GLM
+- This still includes both the gls and glm model below
+- The final model and the figure are in the figure script
+
+
+```{r, warning=F, size = 'small', echo=FALSE, fig.width=8, fig.height=4}
+
+gls.data <- met.mle.final%>% 
+  filter(min.DO != -Inf)%>%
+  filter(turb_median < 50)%>%
+  mutate(min.DO = min.DO*100, t = log(turb_median), 
+         q = log(SV.cms), l = log(GHI.day), g = log(GPP))
+
+## gls: no autocorrelation here so can use GLM
+gls_minDO <- gls(min.DO ~ t + q + l,
+                 data = gls.data,
+                 na.action = na.omit,
+                 correlation = corAR1(form = ~ 1 | date)) 
+summary(gls_minDO)
+
+## quick figure
+gls.data %>%
+  mutate(mon = month(date))%>%
+  ggplot(aes(x  = t, y = min.DO, col = l))+ #fire, year, etc
+           geom_point()
+
+## GLM (no autocorrelation)
+bp.mod <- glm(min.DO ~ t + q + l,
+              data = gls.data,
+              na.action = na.omit)
+
+seg_mod <- segmented(bp.mod, seg.Z = ~t, 
+                     psi = list("t" = 10))
+summary(seg_mod)
+plot(seg_mod)
+resid_var <- var(residuals(gls_minDO))
+total_var <- var(gls.data$min.DO)
+R2 <- 1 - resid_var / total_var
+R2
+
+```
+
+
+
+

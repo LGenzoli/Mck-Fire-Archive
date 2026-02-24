@@ -1,0 +1,1002 @@
+---
+title: 'McKinney Fire metabolism: Model comparisons and QA'
+author: "Laurel Genzoli"
+date: "2025-07-29"
+format:
+  html:
+    self-contained: true
+    fig-align: center
+    theme: united
+    highlight: tango
+    number-sections: true
+  pdf:
+    pdf-engine: xelatex
+    number-sections: true
+    toc: true
+    fig-align: center
+    keep-tex: true
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{=html}
+<style type="text/css">
+body, td {font-size: 12px;}
+code.r{font-size: 8px;}
+pre {font-size: 10px}
+</style>
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = F, message = F)
+knitr::opts_knit$set(root.dir = '/Users/laurelgenzoli/Dropbox/2024_Projects/Mckinney_Fire_Metab/Mck-Fire-Metab-GH')
+def.chunk.hook  <- knitr::knit_hooks$get("chunk")
+knitr::knit_hooks$set(chunk = function(x, options) {
+  x <- def.chunk.hook(x, options)
+  ifelse(options$size != "normalsize", paste0("\n \\", options$size,"\n\n", x, "\n\n \\normalsize"), x)
+})
+
+```
+
+# Script Description
+
+This script contains the streamMetabolizer model diagnostics for year round data at Seiad Valley from 2018-2023. This is the minimal reproducible code that shows how we assessed the output of the metabolism model and what data we flagged to exclude from our analysis. 
+
+We first ran the model using the Bayesian solution in sM, and assessed the output from this model. We found variation in K600 that was still more than we would like (due to issues with how sM essentially ignores priors and brings in more day to day variation than what is likely based on discharge variation). After assessing the model output and finding it to be overall good (with the exception of K600 variation being less than ideal), we used the K600 output to "hand pool" K600 using a Loess relationship between K600 and discharge. Then we assigned a K600 value to each day based on Q, and reran the model using the MLE solution with a fixed value for K600.
+
+In our model assessments, we looked at the following and flagged data to exclude from our analysis when the model did not perform well on a given day. While we considered model convergence and model fits in the Bayes run before using the K600 values to hand-pool K600 in our MLE run, we found the data set to be very good overall, and the few outlier points in K600 have very little effect on the relationship between K600 and flow, so we retained all K600 estimates at this step. 
+
+In our MLE run (final estimates), we compared the outcomes to the Bayes run, looked at model fits along side realistic values of ER and GPP, and we examined days were GPP and ER were negative and positive respectively. We excluded ER when daily DO was supersaturated for the full day because this causes ER to be estimated as positive. We then applied QA codes to MLE data set to exclude these days from the analysis. We scaled the metabolism data to depth, and added covariates to this data frame for further analysis presented within the final manuscript. 
+
+# Load packages and data
+
+## Packages
+```{r, echo = T, message = F}
+setwd('/Users/laurelgenzoli/Dropbox/2024_Projects/Mckinney_Fire_Metab/Mck-Fire-Metab-GH')
+
+library(tidyverse)
+library(lubridate)
+library(dataRetrieval)
+library(viridis)
+library(cowplot)
+library(ggpubr)
+library(streamMetabolizer)
+library(hms)
+library(plotly)
+library(timeDate)
+library(zoo)
+
+theme_set(theme_classic())
+```
+
+
+## Data
+
+### Flow data
+
+ - Discharge at SV and IG
+ - Downloaded using dataRetrieval
+ 
+```{r, warning=F, size = 'small', echo=FALSE}
+
+svq <- readNWISdv(siteNumbers = "11520500" , parameterCd = "00060", 
+                  startDate = "2018-05-17", endDate = "2024-09-30")%>%
+  dplyr::select("Date", "X_00060_00003")%>%
+  rename(date = "Date", SV.cfs = "X_00060_00003")%>%
+  mutate(date = as.Date(date))
+
+igq <- readNWISdv(siteNumbers = "11516530" , parameterCd = "00060", 
+                  startDate = "2018-10-01", endDate = "2024-09-30")%>%
+  dplyr::select("Date", "X_00060_00003")%>%
+  rename(date = "Date", IG.cfs = "X_00060_00003")%>%
+  mutate(date = as.Date(date))
+
+water_year <- function(dates) {
+  year(dates) + if_else(month(dates) >= 10, 1, 0)}
+
+```
+
+### Sonde data
+  - Water quality data (the cleaned sonde file that was used in metab calcs)
+  - Does not have Turbidity data included in this df
+  - This data is held by the Karuk Tribe and request for this raw water quality data needs to be made directly to the Karuk DNR
+
+```{r, warning=F, size = 'small', echo=FALSE}
+sv.sonde <- read_csv("Data/SV_clean-23072025.csv")%>%
+  mutate(DO.per = DO.obs/DO.sat*100)%>%
+  mutate(year = year(date))
+
+over.sat <- sv.sonde %>%
+  mutate(DO.percent = DO.obs/DO.sat)%>%
+  group_by(date)%>%
+  summarise(min.DO = min(DO.percent, na.rm = T,
+            max.DO = max(DO.percent, na.rm = T)))
+
+```
+
+### Sonde data with all parameters for daily stats: 
+  - The other water quality parameters (sc, Turb, pH) have not been QA'd visually
+  - We didn't end up analyzing other water quality in this project; just turb and DO
+  - Data was started late Oct 2018; update with turb data from May 2018
+  - No need for other WQ data in this analysis; just sub for full time period turbidity data
+  - Missing turb data is minimal and wont change analysis-not going to interpolate
+  - similar to Sonde file above, this data is held by the Karuk Tribe and request for this raw water quality data needs to be made directly to the Karuk DNR
+  - The final file here is "sv.wq" and has daily stats for wq parameters
+
+
+```{r, warning=F, size = 'small', echo=FALSE, fig.width=8, fig.height=30}
+sv.turb <- read_csv("Data/SV_turbidity_update_2025121700173883.csv", skip = 12, 
+                  col_names = c("dtime", "turb"))%>%
+          separate(dtime, into = c("date", "time"), sep = " ", remove = F)%>%
+          mutate(dtime = force_tz(dtime, tz='Etc/GMT+8'),
+                 Y = year(dtime))
+  
+sv.T <- sv.turb %>% 
+  mutate(r.dtime = round_date(dtime, unit = "15 minutes"))%>%
+  distinct(r.dtime, .keep_all = T)
+
+min.15 <- as_tibble(timeSequence(from= "2018-05-17 00:00:00", 
+                                        to= "2023-12-31 23:45:00", 
+                                        by = "15 min"))%>%
+  rename(r.dtime = 1)%>%
+  mutate(r.dtime = force_tz(r.dtime, tz='Etc/GMT+8'))
+
+sv.TURB <- min.15 %>% 
+  left_join(sv.T, by = "r.dtime")%>%
+  mutate(date = as_date(r.dtime))%>%
+  mutate(year = year(r.dtime))%>%
+  mutate(mon = month(r.dtime))%>%
+  mutate(season = ifelse(mon %in% c(1:3), "winter", 
+                         ifelse(mon %in% c(4:6), "spring",
+                         ifelse(mon%in% c(7:9), "summer", "fall"))))%>%
+  mutate(water.year = water_year(r.dtime))
+
+turb_qa <- sv.TURB %>%
+  mutate(y.season = paste(water.year, season))%>%
+ggplot(aes(x = r.dtime, y = turb))+
+  geom_point(alpha = 0.4, col = "cyan3")+
+  geom_line(size = 0.2, col = "cyan4")+
+  facet_wrap(~y.season, ncol = 1, scales = "free")+
+  theme_classic()
+
+turb.update <- sv.TURB %>% 
+  dplyr::select(date, turb)%>%
+   group_by(date) %>%
+  summarise(across(everything(),
+    list(min = ~min(.x, na.rm = TRUE),
+      mean = ~mean(.x, na.rm = TRUE),
+      median = ~median(.x, na.rm = T),
+      max = ~max(.x, na.rm = TRUE),
+      range = ~max(.x, na.rm = TRUE) - min(.x, na.rm = TRUE)),
+    .names = "{.col}_{.fn}"))%>%
+  mutate(date = as.Date(date))
+
+sv.wq.one <- read_csv("Data/SV_2018-2024_AllParams.csv", skip = 16, col_names = c("dtime", "temp.water", "sc", "domg", "ph", "turb"))%>%
+            separate(dtime, into = c("date", "time"), sep = " ", remove = F)%>%
+           mutate(dtime = force_tz(dtime, tz='Etc/GMT+8'))%>%
+  dplyr::select(-dtime, -time, -turb) %>%                  
+  group_by(date) %>%
+  summarise(across(everything(),
+    list(min = ~min(.x, na.rm = TRUE),
+      mean = ~mean(.x, na.rm = TRUE),
+      median = ~median(.x, na.rm = T),
+      max = ~max(.x, na.rm = TRUE),
+      range = ~max(.x, na.rm = TRUE) - min(.x, na.rm = TRUE)),
+    .names = "{.col}_{.fn}"))%>%
+  mutate(date = as.Date(date))
+
+sv.wq <- turb.update %>%
+  left_join(sv.wq.one, by = "date")
+
+names(sv.wq)
+
+``` 
+  
+
+
+
+### Metabolism data from Bayes run
+
+  - Metabolism output 
+  - Model fit and diagnostics files
+
+
+```{r, warning=F, size = 'small', echo=FALSE}
+met.bin <- read_csv("Data/Metab_Output/Binned/SV_GPP_ER_BIN.csv")%>%
+  left_join(svq, by = "date")%>%
+  left_join(igq, by = "date")%>%
+  mutate(year = year(date))%>%
+  mutate(water.year = as.factor(water_year(date)))%>%
+  mutate(jday = yday(date))%>%
+  mutate(mon = month(date))%>%
+  mutate(NEP.daily = GPP.daily + ER.daily)%>%
+  left_join(over.sat, by = "date")%>%
+  mutate(oversat = ifelse(min.DO > 1, "over.sat", "good"))%>%
+  mutate(year = as.factor(year))%>%
+   mutate(run = "bin")
+
+
+mod.fits.bin <- read_csv("Data/Metab_Output/Binned/SV_fits_BIN.csv")%>%
+ mutate(week = week(solar.time))%>%
+ mutate(jday = yday(solar.time),
+        year = year(solar.time),
+        mon = month (solar.time),
+        DO.def = DO.sat - DO.obs)
+
+load("Data/Metab_Output/Binned/SV_RDA_BIN.rda")
+met.fit.bin <- metab.fit.rda
+
+fits.bin <- mod.fits.bin%>% 
+  group_by(date)%>%
+  summarize(rmse = sqrt(mean((DO.mod-DO.obs)^2)),
+            sd = sd(DO.obs),
+            min = min(DO.obs, na.rm = T),
+            max = max(DO.obs, na.rm = T),
+            range = max-min,
+            nrmse = rmse/range)
+
+test.fits.bin <- mod.fits.bin %>% left_join(fits.bin, by = "date")
+```
+
+### Metabolism data from MLE run with "hand-pooled" K600
+
+Similar to above but for the MLE run which used the gas exchange values calculated in the first half of this script to estimate and assign K600 to the MLE run
+
+```{r, warning=F, size = 'small', echo=FALSE}
+
+mod.fits.mle <- read_csv("Data/Metab_Output/MLE/SV_fits_BIN.csv")%>%
+ mutate(week = week(solar.time))%>%
+ mutate(jday = yday(solar.time),
+        year = year(solar.time),
+        mon = month (solar.time),
+        DO.def = DO.sat - DO.obs)
+
+met.fit.mle <-load("Data/Metab_Output/MLE/SV_RDA_BIN.rda")
+
+fits.mle <- mod.fits.mle%>% 
+  group_by(date)%>%
+  summarize(rmse = sqrt(mean((DO.mod-DO.obs)^2)),
+            sd = sd(DO.obs),
+            min = min(DO.obs, na.rm = T),
+            max = max(DO.obs, na.rm = T),
+            range = max-min,
+            nrmse = rmse/range)
+
+test.fits.mle <- mod.fits.mle %>% left_join(fits.mle, by = "date")
+
+
+met.mle <- read_csv("Data/Metab_Output/MLE/SV_GPP_ER_BIN.csv")%>%
+  left_join(svq, by = "date")%>%
+  left_join(igq, by = "date")%>%
+  mutate(year = year(date))%>%
+  mutate(water.year = as.factor(water_year(date)))%>%
+  mutate(jday = yday(date))%>%
+  mutate(mon = month(date))%>%
+  mutate(NEP.daily = GPP.daily + ER.daily)%>%
+  left_join(over.sat, by = "date")%>%
+  mutate(oversat = ifelse(min.DO > 1, "over.sat", "good"))%>%
+  mutate(year = as.factor(year))%>%
+  mutate(run = "mle")%>%
+  left_join(fits.mle %>% dplyr::select(date, nrmse), by = "date")%>%
+  left_join(sv.wq, by = "date")
+
+```
+
+
+### Light data
+
+```{r, warning=F, size = 'small', echo=FALSE, fig.width=9, fig.height=9}
+
+PAR <- read_csv("Data/Light/SV_light_2018-2023-20250723.csv")%>%
+  dplyr::select(time, date, GHI, clear.sky.GHI, dhi, cloud_type)%>%
+  mutate(k_t = GHI / clear.sky.GHI,    
+    diffuse_frac = dhi / GHI,
+    smoke_flag = ifelse(cloud_type==0 & k_t<0.8&diffuse_frac > 0.4, TRUE, FALSE))
+  # Flag probable smoke: clear sky but reduced GHI + high diffuse
+
+
+
+
+
+
+p0 <-  PAR %>% slice(40000:40600) %>% ggplot(aes(x = time, y = cloud_type))+
+  geom_line(col = "grey", lwd = 1.2)+
+  geom_line(aes(x = time, y = k_t), 
+            col = "cyan4", lwd = 1.2, alpha = 0.6)+
+  geom_line(aes(x = time, y = diffuse_frac), 
+            col = "skyblue3", lwd = 1.2, alpha = 0.6)+
+  facet_wrap(~date)+
+  geom_hline(yintercept = 0.8, lty = 2, col = "cyan4")+
+    geom_hline(yintercept = 0.4, lty = 2, col = "skyblue3")
+
+  
+
+p1 <- PAR %>% slice(625:1100) %>% ggplot(aes(x = time, y = GHI))+
+  geom_line(col = "gold", lwd = 1.2)+
+  geom_line(aes(x = time, y = dhi), 
+            col = "skyblue", lwd = 1.2, alpha = 0.3)+
+  geom_line(aes(x = time, y = clear.sky.GHI), 
+            col = "grey20", lwd = 1.2, alpha = 0.3)+
+  facet_wrap(~date)
+
+PAR.Day <- PAR%>%
+  group_by(date)%>%
+  summarize(GHI.day = mean(GHI), 
+            clear.sky.GHI.day = mean(clear.sky.GHI),
+            dhi.day = mean(dhi),
+            cloud.day = mode(cloud_type),
+            k_t.day = mean(k_t),
+            diffuse_frac.day = mean(diffuse_frac))
+
+p2 <- PAR.Day %>% 
+  mutate(year = year(date))%>%
+  ggplot(aes(x = date, y = GHI.day))+
+  geom_line()+
+  facet_wrap(~year, scales = "free", ncol =2)
+
+
+
+plot_grid(p1, p2)
+```
+
+# Run 1 diagnostics: Bayesian binned-Q run
+
+## First look at metabolism time series from the binned-Q run
+  - Some +ER during high flows in winter
+  - One period of weird +ER that may be due to biofouling
+  - A few extreme estimates during the turbidity pulses
+  - Overall, really nice, complete time series!
+
+```{r, warning=F, size = 'small', echo=FALSE, fig.width=10, fig.height=7}
+
+ggplot(met.bin, aes(x = jday, y = GPP.daily))+
+  geom_abline(slope = 0, intercept = 0, width = 1, alpha = 0.6)+
+  geom_line(col = "cyan4", alpha = 0.8)+
+  geom_ribbon(aes(ymin = GPP.daily.lower, ymax = GPP.daily.upper), 
+              alpha = 0.4, fill = "cyan4")+
+  geom_line(aes(x = jday, y = ER.daily),
+            col = "chocolate3", alpha = 0.8)+
+  geom_ribbon(aes(ymin = ER.daily.lower, ymax = ER.daily.upper), 
+              alpha = 0.4, fill = "chocolate3")+ 
+  geom_point(aes(x = jday, y = NEP.daily),
+             alpha = 0.5, size = 0.6)+
+  facet_wrap(~year, ncol = 2)
+```
+
+
+
+## Model convergence diagnostics for the binned-Q run
+
+  - r_hat values are all < 1.05
+  - 4 days had n_eff < 200 but even these were 100 or more
+
+```{r, , echo=FALSE, warning=F, size = 'small', fig.width=10, fig.height = 5}
+mf.day <- met.fit.bin$daily
+mf.over <- met.fit.bin$overall
+
+p1 <- mf.day %>% dplyr::select(date, GPP_daily_n_eff, ER_daily_n_eff, K600_daily_n_eff)%>%
+  pivot_longer(2:4, values_to = "n_eff", names_to = "Param")%>%
+ggplot(aes(x = date, y =  n_eff))+
+  geom_hline(yintercept = 100, col = "red", lty = 2)+
+  geom_hline(yintercept = 200, col = "red", lty = 2)+
+  geom_point(size = 0.5, alpha = 0.5)+
+  theme_classic()+
+  facet_wrap(~Param, ncol = 3)
+
+p2 <- mf.day %>% 
+  dplyr::select(date, GPP_daily_Rhat, ER_daily_Rhat, K600_daily_Rhat)%>%
+  pivot_longer(2:4, values_to = "Rhat", names_to = "Param")%>%
+ggplot(aes(x = date, y =  Rhat))+
+  geom_hline(yintercept = 1.05, col = "red", lty = 2)+
+  geom_point(size = 0.5, alpha = 0.5)+
+  theme_classic()+
+  facet_wrap(~Param, ncol = 3)
+
+plot_grid(p1, p2, nrow = 2)
+
+QA_converge <- mf.day %>% 
+dplyr::select(date, GPP_daily_n_eff, ER_daily_n_eff, K600_daily_n_eff)%>%
+  pivot_longer(2:4, names_to = "Param", values_to = "n_eff")%>%
+  filter(n_eff < 200)%>%
+  distinct(date)
+```
+
+
+## Model fits
+
+There is no standard cutoff, or even established metric for assessing model fits for metabolism models. We used the normalized room mean square error (NRMSE), because larger daily fluctuations in dissolved O$_2$ are more robust to model fit errors than days with small daily fluctuations. We visually examined day with NRMSE > 0.15, and looked at how well these poorer fits corresponded with day where K600 fluctuated more than expected. 
+
+### NRMSE > 0.15
+
+  - Plots show fits on all days with NRMSE > 0.15
+  - Very few days with this level of poor fit (39 days)
+  - Note the different y-axis for each panel
+
+
+```{r, warning=F, , echo=FALSE, size = 'small', fig.width=10, fig.height = 10}
+fits.bin <- mod.fits.bin%>% 
+  group_by(date)%>%
+  summarize(rmse = sqrt(mean((DO.mod-DO.obs)^2)),
+            sd = sd(DO.obs),
+            min = min(DO.obs, na.rm = T),
+            max = max(DO.obs, na.rm = T),
+            rang = max-min,
+            nrmse = rmse/rang)
+
+nrmsehist <- fits.bin %>%
+  mutate(mon = month(date))%>%
+  ggplot(aes(nrmse, fill = mon, col = mon))+
+  geom_histogram()+
+  theme_classic()
+
+mod.fits.bin %>% 
+  left_join(fits.bin, by = "date")%>%
+  mutate(mon = month(date))%>%
+  filter(nrmse >= 0.15)%>%
+  ggplot(aes(y = DO.obs, x= solar.time, col = nrmse))+
+  geom_point( alpha = .7, size = 1.3)+
+  geom_line(aes(y = DO.mod, x = solar.time), col = "grey20")+
+  facet_wrap(~date, scales = "free", ncol  = 6)+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  scale_x_datetime(date_labels = "%H:%M")+
+  scale_color_viridis_c(begin = 0.3)+
+  theme_classic()+
+  theme(legend.position = "bottom", legend.direction = "horizontal")
+```
+
+
+# K600 values from the binned-Q run
+
+## K600 time series
+Red circles show days where NRMSE was > 0.15, while poor fits explain some of the extreme points, the fits largely don't identify a lot of funky K values, leading me to think that pooling by hand may be our best option for this data set
+
+
+```{r, warning=F, size = 'small', echo=FALSE, fig.width=9, fig.height = 6}
+pts <- met.bin %>% 
+  left_join(fits.bin, by = "date")%>%
+  filter(nrmse > 0.15)
+
+
+met.bin %>% 
+ggplot(aes(x = date, y = K600.daily))+
+  geom_line(aes(x = date, y = log(SV.cfs, 1.8)), col = "cyan4")+
+  geom_abline(slope = 0, intercept = 10.4, width = 1, alpha = 0.6, lty = 2)+
+  geom_point(aes(col = jday), alpha = 0.6, size = 0.6)+
+  geom_ribbon(aes(ymin = K600.daily.lower, ymax = K600.daily.upper), 
+              alpha = 0.4, fill = "grey25")+
+  facet_wrap(~year, ncol = 2, scales = "free")+
+  theme_classic()+
+  geom_point(data = pts, aes(x = date, y = K600.daily), 
+             col = "red", alpha = 0.8, size = 2, shape = 1)+
+  scale_color_viridis()
+
+```
+
+
+
+## K600 by ER relationships
+ 
+Correlation between ER and K600 ($r^2$ = 0.66); correlations are OK due to flow. When flows are low, K600 is low and GPP is high, which makes ER high. So it is biologically relevant, not due to overfitting of K600 and ER. 
+
+```{r, warning=F, size = 'small', echo=FALSE, fig.align = "center", fig.width=10, fig.height = 3.4}
+
+ker <- ggplot(met.bin, aes(x = K600.daily, y = ER.daily, col = year))+
+  geom_point(size = 0.6, alpha = 0.6)+
+  theme_classic()+
+  scale_color_viridis_d()+
+  theme(legend.position = "null")
+
+r2 <- cor(met.bin$ER.daily, met.bin$K600.daily, use = "complete.obs")
+
+ker.year<- ggplot(met.bin, aes(x = K600.daily, y = ER.daily, col = as.factor(year)))+
+  geom_point(size = 0.6, alpha = 0.6)+
+  theme_classic()+
+  scale_color_viridis_d()+
+  theme(legend.position = "null")+
+  facet_wrap(~year, ncol = 3)+
+  ylim(c(-30, 0))
+
+plot_grid(ker, ker.year, rel_widths = c(0.4, 0.6))
+```
+
+## K600 by year and by discharge
+
+- Mean K600 = 11$^{-d}$
+- General trend of higher flow years having higher K$_{600}$
+- This is all good; data aligns with expectations here
+
+```{r, warning=F, size = 'small', echo=FALSE, fig.align = "center", fig.width=9, fig.height = 3.4}
+#mean(met.bin$K600.daily, na.rm = T)
+
+kyear <- met.bin %>%
+ggplot(aes(x = as.factor(year), y = K600.daily, fill = as.factor(year), col = as.factor(year)))+
+    geom_hline(yintercept = 11, lty = 2)+
+  geom_boxplot(alpha = 0.8)+
+  theme_classic()+
+  scale_fill_viridis_d()+
+  scale_color_viridis_d()+
+  theme(legend.position = "null",
+        axis.text.x = element_text(angle = 90, hjust = 1))
+
+kyear.flow <- met.bin%>%
+  group_by(year)%>%
+  summarize(Discharge.cms = mean(SV.cfs, na.rm = T), 
+            Mean.K600 = mean(K600.daily, na.rm = T))%>%
+  ggplot(aes(x = Discharge.cms, y = Mean.K600, col = as.factor(year)))+
+  geom_point(size = 3, alpha = 0.9)+
+  theme_classic()+
+  scale_color_viridis_d()+
+  theme(legend.position = "null")
+
+plot_grid(kyear.flow, kyear, rel_widths = c(0.35, 0.65))
+
+```
+
+
+## K600 by discharge
+
+Relationship here is really clean; lowest K600 at lowest flows, with an increase in gas exchange between 1000 to 2000 cfs, then it generally level out across higher flows.
+
+We have so many data points that we did not bother with eliminating the few potential outliers that may have been attributed to poorer model fits. Using fixed K600 from this relationship will fix this problem entirely. 
+  
+```{r, warning=F, size = 'small', echo=FALSE, fig.width=10, fig.height = 9}
+
+
+p1 <- met.bin %>% 
+  mutate(Discharge_cms = SV.cfs*0.0283168 )%>%
+  ggplot(aes(x = Discharge_cms, y = K600.daily)) +
+  geom_point(aes(col = mon, shape = year), size = 1.5, alpha = 0.8) +
+  scale_x_log10()+
+  scale_color_viridis()+
+  stat_smooth(method = "loess", se = FALSE, col = "black", size = 1)+
+  theme(legend.direction = "horizontal",
+        legend.position = c(0.76, 0.25))
+
+p2 <- met.bin %>% 
+  arrange(year, jday) %>%  # ensure proper order
+  ggplot(aes(x = SV.cfs, y = K600.daily, col = jday, group = year)) +
+  geom_path(alpha = 0.5) +  # line for hysteresis
+  geom_point(size = 1.5, alpha = 0.8) +
+  scale_x_log10() +
+  scale_color_viridis_c() +
+  facet_wrap(~year, ncol = 2) +
+  theme(legend.position = "none")
+
+plot_grid(p1, p2, nrow = 2, rel_heights = c(0.45, 0.55))
+
+
+#pdf("Figures/Publication_Plots/SI_k600_q.pdf", height = 3.5, width = 6)
+#plot_grid(p1)
+#dev.off()
+
+
+```
+
+
+## Estimate K600 based on daily Q and rerun metabolism in MLE
+
+We used a loess relationship (shown in plot above) to estimate K600, then export the K600 estimates and use them to model metabolism using the MLE method. Metabolism estimates are done in "SV-MetabCalcs.R" script, in the second half of the script after the binned-Q run.
+
+```{r, warning=F, size = 'small', echo=FALSE, fig.width=7, fig.height = 9}
+
+met.bin <- met.bin %>% mutate (discharge = SV.cfs*0.0283168)
+loess_fit <- loess(K600.daily ~ discharge, data = met.bin)
+sv.sonde$K600.daily <- predict(loess_fit, newdata = sv.sonde)
+
+#write.csv(sv.sonde, "Data/SV_clean-MLE23072025.csv")
+
+```
+
+# Compare MLE metabolism to Bayes
+
+MLE and Bayes results are similar, but there is less day to day variation in the MLE run, as expected, during peak GPP, the binned runs often underestimate GPP and ER by a little bit. The CV for metabolism is higher in the Bayes run than the hand-pooled K, but not hugely different (CV for Bayes then MLE):
+
+  - K600: 0.17 vs. 0.13
+  - ER: -0.95 vs. -0.89
+  - GPP: 0.75 vs. 0.78
+
+```{r, warning=F, size = 'small', echo=FALSE, fig.width=10, fig.height = 12}
+cv <- function(x) {sd(x, na.rm = TRUE) / mean(x, na.rm = TRUE)}
+
+cvmle <- c(cv(met.mle$K600.daily), cv(met.mle$ER.daily), cv(met.mle$GPP.daily))
+
+cvbin <- c(cv(met.bin$K600.daily), cv(met.bin$ER.daily), cv(met.bin$GPP.daily))
+
+
+met.comp <- met.bin%>%
+  bind_rows(met.mle)%>%
+  dplyr::select(run, year, jday, GPP.daily, ER.daily, K600.daily)%>%
+  mutate(ER.daily  = ER.daily * -1)%>%
+  pivot_longer(4:6, names_to = "param", values_to = "flux")%>%
+ggplot(aes(x = jday, y = flux,  col = run))+
+  geom_line( alpha = 0.8)+
+  facet_grid(year~param)+
+  scale_y_continuous(limits = c(0,20))+
+  ylab("Flux or Rate")+
+  theme(legend.position = "bottom")
+
+#pdf(width = 10, height = 12, "Figures/met-compare.pdf")
+met.comp
+#dev.off()
+```
+
+# MLE metabolism model output 
+
+## MLE model fits
+
+There is no standard cutoff, or even established metric for assessing model fits for metabolism models. We used the normalized room mean square error (NRMSE), because larger daily fluctuations in DO are more robust to model fit errors than days with small daily fluctuations. In looking at model fits with higher NRMSE scores, we find that most of them are from days with very low DO exchange, and so even though there may be some poor fits, they are overall still decent and give us the same outcome: low metabolism. So, instead of using a cutoff in NRMSE, we examined poor fit in the time series and only eliminated egregious fits and fits that were poor and gave suspect (or blatantly unrealistic) values of metabolism. Because we are not also estimating K600, we feel pretty OK about model fits that are not perfect, as long as the DO on a given day is governed by the assumptions of the metabolism equations. 
+
+
+
+### NRMSE > 0.1
+
+  - Plots show fits on all days with NRMSE > 0.1
+  - Very few days with this level of poor fit (111 days, most look great)
+  - Note the different y-axis for each panel
+  - NRMSE over-penalizes days with low DO change
+  - Most days look pretty good, even here
+
+
+```{r, warning=F, , echo=FALSE, size = 'small', fig.width=15, fig.height = 19}
+fits.m <- mod.fits.mle%>% 
+  group_by(date)%>%
+  summarize(rmse = sqrt(mean((DO.mod-DO.obs)^2)),
+            sd = sd(DO.obs),
+            min = min(DO.obs, na.rm = T),
+            max = max(DO.obs, na.rm = T),
+            rang = max-min,
+            nrmse = rmse/rang)
+
+nrmsehist.m <- fits.m %>%
+  mutate(mon = month(date))%>%
+  ggplot(aes(nrmse, fill = mon, col = mon))+
+  geom_histogram()+
+  theme_classic()
+
+mod.fits.mle %>% 
+  left_join(fits.m, by = "date")%>%
+  mutate(mon = month(date))%>%
+  filter(nrmse >  .1)%>%
+  ggplot(aes(y = DO.obs, x= solar.time, col = nrmse))+
+  geom_point( alpha = .7, size = 1.3)+
+  geom_line(aes(y = DO.mod, x = solar.time), col = "grey20")+
+  facet_wrap(~date, scales = "free", ncol  = 8)+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  scale_x_datetime(date_labels = "%H:%M")+
+  scale_color_viridis_c(begin = 0.3)+
+  theme_classic()+
+  theme(legend.position = c(0.75, 0.01), legend.direction = "horizontal")
+
+```
+
+
+### NRMSE at high DO exchange
+
+  Low is low, so I'm not worried about poor model fits when GPP is very low. Only a few days are poor fits and correspond to funky values of GPP including:
+  
+    - 7/27/2021 and 7/30/2021 (big DO exchange; model missed the peaks)
+    - 8/3/2022 (Day of big turbidity pulse)
+    - 8/20/2023-8/22/2023 (2023 turbidity pulse)
+  
+```{r, warning=F, , echo=FALSE, size = 'small', fig.width=8, fig.height = 8}
+fits.m <- mod.fits.mle%>% 
+  group_by(date)%>%
+  summarize(rmse = sqrt(mean((DO.mod-DO.obs)^2)),
+            sd = sd(DO.obs),
+            min = min(DO.obs, na.rm = T),
+            max = max(DO.obs, na.rm = T),
+            rang = max-min,
+            nrmse = rmse/rang)
+
+nrmsehist.m <- fits.m %>%
+  mutate(mon = month(date))%>%
+  ggplot(aes(nrmse, fill = mon, col = mon))+
+  geom_histogram()+
+  theme_classic()
+
+mod.fits.mle %>% 
+  left_join(fits.m, by = "date")%>%
+  mutate(mon = month(date))%>%
+  filter(nrmse > 0.1)%>%
+  filter(rang > 1)%>%
+  ggplot(aes(y = DO.obs, x= solar.time, col = nrmse))+
+  geom_point( alpha = .7, size = 1.3)+
+  geom_line(aes(y = DO.mod, x = solar.time), col = "grey20")+
+  facet_wrap(~date, scales = "free", ncol  = 5)+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  scale_x_datetime(date_labels = "%H:%M")+
+  scale_color_viridis_c(begin = 0.3)+
+  theme_classic()+
+  theme(legend.position = "bottom", legend.direction = "horizontal")
+
+
+
+```
+
+
+###  Time series of GPP with poor model fits in purple
+
+I used this to identify where model fits affected the metabolism estimates. Any fit with NMRSE > 0.1 is in purple, so most of these fits are actually still pretty dang good, as shown in fit plots above, but there are a few funky values the correspond to poor fits.
+
+```{r, warning=F, , echo=FALSE, size = 'small', fig.width=10, fig.height = 5}
+
+met.mle2 <- met.mle %>%
+  mutate(fit = ifelse(nrmse > 0.1, "bad", "good"))
+
+p <-ggplot(met.mle2, aes(x = jday, y = GPP.daily, col = fit,
+                     text = paste("Date:", date))) +  
+  geom_line(aes(group = 1)) + 
+  geom_hline(yintercept = 0, lty = 2) +
+  geom_point(alpha = 0.7, size = 0.5) +
+  facet_wrap(~year, nrow = 3, scales = "free_y") +
+  scale_color_viridis_d() +
+  theme(legend.position = "bottom")
+
+
+
+#ggplotly(p, tooltip = "text") %>%
+#  htmlwidgets::saveWidget(file = "Figures/GPP_Realistic.html", selfcontained = TRUE)
+
+p
+
+```
+
+
+###  Time series of ER with poor model fits in purple
+
+```{r, warning=F, , echo=FALSE, size = 'small', fig.width=10, fig.height = 5}
+
+ggplot(met.mle2, aes(x = jday, y = ER.daily, col = fit,
+                     text = paste("Date:", date))) +  
+  geom_line(aes(group = 1)) + 
+  geom_hline(yintercept = 0, lty = 2) +
+  geom_point(alpha = 0.7, size = 0.5) +
+  facet_wrap(~year, nrow = 3, scales = "free_y") +
+  scale_color_viridis_d() +
+  theme(legend.position = "bottom")
+
+#ggplotly(p, tooltip = "text") %>%
+#htmlwidgets::saveWidget(file = "Figures/ER_Realistic.html", selfcontained = TRUE)
+
+
+```
+
+
+
+
+### Positive ER and super-saturation
+
+This shows where DO remains above 100% saturation over a full 24 hour period. This condition results in positive estimates of ER, but doesn't affect GPP estimates. This only occurred in winter during higher flows/colder temps, and during one fall period where some sort of biofouling likely occurred that was possibly not identified by during field calibrations--but we will likely never know.
+
+In these occurrances, we flagged the ER data, but retain GPP values in our data set.
+
+```{r, warning=F, , echo=FALSE, size = 'small', fig.width=10, fig.height = 5}
+p <- met.mle %>%
+  ggplot(aes(x = jday, y = ER.daily, col = oversat,
+             text = paste("Date:", date))) +  # Add date as tooltip text
+  geom_hline(yintercept = 0, lty = 2) +
+  geom_point(alpha = 0.7, size = 0.5) +
+  facet_wrap(~year, nrow = 3, scales = "free_y") +
+  scale_color_viridis_d() +
+  theme(legend.position = "bottom")
+
+
+#ggplotly(p, tooltip = "text") %>%
+#  htmlwidgets::saveWidget(file = "Figures/ER_oversat.html", selfcontained = TRUE)
+
+p
+
+```
+ 
+## Dates to flag
+
+While 111 (5% of data set) days had model fits with an NRMSE > 0.1, the vast majority of these days had poor NRMSE scores due to very small daily DO fluctuation, indicating low metabolism. In order to not eliminate days where metabolism was very low but estimates were very likely good, we examined poor model fits in the time series, and only eliminated days where model fits were poor and caused values of GPP and ER that were unlikely given the surrounding data points, or that produced biologically impossible estimates of GPP and/or ER. This resulted in just 7 days being flagged for poor model fits.  
+ 
+  - 2021-07-27
+  - 2021-07-30
+  - 2022-04-16
+  - 2022-08-03
+  - 2023-08-20
+  - 2023-08-21
+  - 2023-08-22
+  
+The 2021 dates appear to have had a cold front move in, likely depressing GPP as predicted, but model fits were sufficiently poor to not trust estimates, despite the downward shift in GPP those days being likely.
+
+In 2022, the April date had a relatively small DO exchange, and model fit was not egregious, but the daily pattern was irregular, suggesting mid-day shifts in process the produced a negative GPP estimate. August of 2022 was the day of the huge turbidity pulse, with highly irregular within day DO consumption.
+
+August 2023 had a huge turbidity pulse due to more rain on the McKinney Fire scar, making for weird DO that the model didn't like.
+
+Fits for these 7 days plotted below:
+
+  
+```{r, warning=F, size = 'small', echo=FALSE, fig.width=8, fig.height=4}
+
+mod.fits.mle %>% 
+  filter(date %in% c("2021-07-27", "2021-07-30", "2022-04-16", "2022-08-03", 
+                    "2023-08-20", "2023-08-21", "2023-08-22"))%>%
+  left_join(fits.m, by = "date")%>%
+  ggplot(aes(y = DO.obs, x= solar.time, col = nrmse))+
+  geom_point( alpha = .7, size = 1.3)+
+  geom_line(aes(y = DO.mod, x = solar.time), col = "grey20")+
+  facet_wrap(~date, scales = "free", ncol  = 4)+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  scale_x_datetime(date_labels = "%H:%M")+
+  scale_color_viridis_c(begin = 0.3)+
+  theme_classic()+
+  theme(legend.position = c(0.85, 0.1), legend.direction = "horizontal")
+```
+
+
+## Flag QA'd data (bad model fits and unrealistic estimates)
+  
+  - Flag dates with poor model fits from visual examination above (7 days)
+  - Flag ER with min daily saturation > 100% (this applies to ER only; 155 days)
+  - Check how many values are above/below 0 after filtering these points above--
+    - ER: 55 days > 0; 44 where the lower limit is > 0
+    - GPP: 24 days < 0; 14 where the upper limit is < 0
+    
+    I'm not going to worry about flagging additional days for unrealistic values b/c there were no estimates of GPP that were beyond -1, and only 4 days of ER were beyond 1 and those were still quite low (less than ~2)--these are well within the error expected on other days and will not change the conclusions of the analysis. 
+
+ 
+ 
+```{r, warning=F, size = 'small', echo=FALSE, fig.width=8, fig.height=4}
+met.mle.QA <- met.mle %>%
+  mutate(QA.mod.fit = case_when(date %in% c("2021-07-27", "2021-07-30", "2022-04-16",         "2022-08-03", "2023-08-20", "2023-08-21", "2023-08-22") ~ "flag",  
+                        TRUE ~ "no.flag"))%>%
+  mutate(QA.ER.SupSat = case_when(oversat == "over.sat" ~ "flag", TRUE ~ "no.flag"))%>%
+  mutate(QA.code = ifelse(QA.mod.fit == "flag", 1, 
+                   ifelse(QA.ER.SupSat == "flag", 2, 0)))
+  
+#met.mle.QA %>% filter(QA.code %in% c(0, 2) & GPP.daily < -1)
+#length(met.mle.QA %>% filter(QA.code %in% c(0, 2) & GPP.daily.upper < 0))
+
+#met.mle.QA %>% filter(QA.code == 0 & ER.daily > 1)
+#met.mle.QA %>% filter(QA.code == 0 & ER.daily.lower > 0)
+#met.mle.QA %>% filter(QA.code == 2)
+```
+
+
+
+
+# Final time series
+
+- Grey points passed the QA
+- Orange points exclude ER (and NEP) only
+- Red points exclude ER and GPP
+
+```{r, warning=F, size = 'small', echo=FALSE, fig.width=8, fig.height=10}
+ggplot(met.mle.QA, aes(x = jday, y = ER.daily, col = as.factor(QA.code)))+
+  geom_abline(slope = 0, intercept = 0, width = 1, alpha = 0.6, lty = 2)+
+  geom_point( size = 1.3, shape = 16, alpha = 0.6)+
+  geom_point(aes(y = GPP.daily, x = jday, col = as.factor(QA.code)),
+             alpha = 0.6, size = 1.3, shape = 17)+
+  facet_wrap(~year, ncol = 1, scales = "free_y")+
+  theme_classic()+
+  theme(legend.position = "null")+
+  ylim(c(-18, 18))+
+  scale_color_manual(values = c("grey", "red", "orange"))
+```
+
+
+
+## Build the data frame
+  - Calc. NEP
+  - Scale ER, GPP, and NEP to depth [z <- exp(-1.47 + 0.45 * log(40))]
+  - Bin light
+  - Only save columns used in McK-Fire analysis
+  - Will need to filter out QA days in figures and analysis scripts; QA codes are included in the final data frame here.
+
+
+```{r, warning=F, Echo = F, size = 'small', fig.align="center", fig.width=7, fig.height=4}
+
+sv.wq.relevant <- sv.wq %>% dplyr:: select(date, turb_min, turb_median, turb_max)
+
+met.mle.final <- met.mle.QA%>%
+  mutate(SV.cms = SV.cfs * 0.0283168)%>%
+  mutate(z = exp(-1.47 + 0.45 * log(SV.cms)))%>%
+  mutate(GPP = GPP.daily*z,
+         GPP.upper = GPP.daily.upper*z,
+         GPP.lower = GPP.daily.lower*z,
+         ER = ER.daily*z,
+         ER.upper = ER.daily.upper*z,
+         ER.lower = ER.daily.lower*z)%>%
+  mutate(NEP = GPP + ER)%>%
+ dplyr::select(GPP, GPP.upper, GPP.lower, ER, ER.upper, ER.lower, NEP, K600.daily, 
+         SV.cfs, IG.cfs, SV.cms, z, 
+         date, year, water.year, jday, mon,
+         min.DO, QA.code)%>%
+  left_join(PAR.Day, by = "date")%>%
+  left_join(sv.wq.relevant, by = "date")%>%
+  dplyr::select(
+    date, year, water.year, mon, jday,
+    GPP, GPP.lower, GPP.upper, ER, ER.lower, ER.upper, NEP, K600.daily,
+  SV.cfs, SV.cms, z, min.DO, GHI.day, turb_min, turb_median, turb_max, QA.code)%>%
+ mutate(across(c(GPP, GPP.lower, GPP.upper,
+        ER, ER.lower, ER.upper, NEP, K600.daily, SV.cms),
+      ~ round(.x, 1)))%>%
+   mutate(across(c(z, turb_min, turb_median, turb_max), ~ round(.x, 2)))%>%
+  mutate(across(c(GHI.day,), ~ round(.x, 0)))%>%
+  mutate(across(c(min.DO), ~ round(.x, 3)))
+
+```
+
+
+
+## Write the final metab data frame
+
+```{r, warning=F, Echo = F, size = 'small', fig.align="center", fig.width=7, fig.height=4}
+
+write.csv(met.mle.final, "Data/met_mle_final.csv")
+
+``` 
+
+
+
+# Short term high freq data
+This is the data for figure 1; during the sediment pulse. 6 days of high frequency data to show what happened during the big sediment pulse.
+
+## Load data and combine to produce the figure 1 data frame
+
+```{r, warning=F, Echo = F, size = 'small'}
+
+svq.sub <- readNWISuv(
+  siteNumbers = "11520500",
+  parameterCd = "00060",    
+  startDate = "2022-07-31",
+  endDate = "2022-08-05") %>%
+  dplyr::select(dateTime, X_00060_00000) %>% 
+  rename(datetime = dateTime, SV.cfs = X_00060_00000) %>%
+  mutate(datetime = as.POSIXct(datetime, tz = 'Etc/GMT+7'))
+
+sv.sonde <- read_csv("Data/SV_2018-2024_AllParams.csv", skip = 16, col_names = c("dtime", "temp.water", "sc", "domg", "ph", "turb"))%>%
+            separate(dtime, into = c("date", "time"), sep = " ", remove = F)%>%
+  mutate(datetime = force_tz(dtime, tz='Etc/GMT+7'))%>%
+  mutate(date = as.Date(date))%>%
+  filter(date >= as.Date("2022-07-30") & date <= as.Date("2022-08-05"))
+
+sv.light <- PAR %>%
+  dplyr::select(time, date, GHI) %>%
+  filter(date >= as.Date("2022-07-30") & date <= as.Date("2022-08-05")) %>%
+  mutate(datetime = ymd_hms(paste(date, time)),
+    datetime = force_tz(datetime, tzone = "Etc/GMT+7"))%>%
+  dplyr::select(-time)
+  
+sub.day <- svq.sub %>% 
+  left_join(sv.sonde, by = c("datetime"))%>%
+  left_join(sv.light, by = c("datetime", "date"))%>%
+  mutate(GHI_interp = na.approx(GHI, x = datetime, na.rm = FALSE, rule = 10))%>%
+  dplyr::select(datetime, GHI, GHI_interp, SV.cfs, domg, turb)%>%
+   mutate(across(c(GHI, GHI_interp), ~ round(.x, 0)))%>%
+  mutate(across(c(turb), ~ round(.x, 2)))
+
+#write.csv(sub.day, "Data/sub-daily-FIRE.csv")
+
+```
+
+
+# Reach length estimates
+
+Estimating reach lengths based on the dissolved oxygen turnover distance. We calculated the reach lenght at 1860 cfs which is about the 50% exceedance flow, using the K600 from the Loess at that flow, depth as estimated from the depth model, and velocity from Jenny Curtis's USGS report. 
+
+  - Curtis data collected June 11-13; 1860 cfs on June 12, 2018
+  - K600 at 1860, based on Loess of Q/K600 from bayes run: 12.7 
+  - 1870 cfs is 50% exceedance prob flow for SV
+
+Estimates of reach length are 8.2 km for the 80% turnover distance and 15.4 for the 95% turnover distance, so I used 10km as my reach length. 
+
+```{r, warning=F, Echo = F, size = 'small', fig.align="center", fig.width=7, fig.height=4}
+geom <- read.csv("Data/Depth/Summary_Table_Geomorphology_and_Land_Surface_Parameters_Klamath_River_California_2018.csv")
+
+geom %>% filter(RKM_Reach_ID %in% c(93:102))%>%
+  summarize(w = mean(Channel_Width_m))%>%
+  mutate(cms = 1860/35.3146,
+         z = exp(-1.47 + 0.45 * log(cms)),
+         v = cms/(w*z),
+         fp80 = (1.6*v*86400)/12.7,
+         fp95 = (3*v*86400)/12.7)
+
+```
+
+
