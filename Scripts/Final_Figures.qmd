@@ -106,6 +106,10 @@ met.mle.final.FIRE <- read_csv("Data/met_mle_final.csv")
 sub.day.1 <- read_csv("Data/sub-daily-FIRE.csv")%>%
   mutate(datetime = force_tz(datetime, tzone = "Etc/GMT+7"))
 
+sub.day.do <- read_csv("Data/SV_clean-23072025.csv")%>%
+  mutate(datetime = force_tz(solar.time, tzone = "Etc/GMT+7"))
+
+
 
 ## model fit data used in SI turbidity spike plot
 mod.fits.bin <- read_csv("Data/Metab_Output/Binned/SV_fits_BIN.csv")%>%
@@ -254,7 +258,9 @@ event
 unique(met.mle.final$fire)
 
 l <- ggplot(met.mle.final, aes(x = date, y = GHI.day, alpha = fire))+
-  geom_vline(xintercept = as.Date("2022-08-03"), lty = 2, col = "red")+
+  geom_vline(xintercept = as.Date("2022-08-03"), lty = 2, col = "black")+
+  geom_vline(xintercept = as.Date("2022-07-29"), lty = 2, col = "red")+
+
   geom_line(col = "gold2", lwd =  0.6)+
   ylab(expression(Surface~light~(W~m^-2)))+
   xlab(NULL) +                                  
@@ -267,8 +273,8 @@ l <- ggplot(met.mle.final, aes(x = date, y = GHI.day, alpha = fire))+
  
   
  q <- ggplot(met.mle.final, aes(x = date, y = SV.cms, alpha = fire))+
-     geom_vline(xintercept = as.Date("2022-08-03"), lty = 2, col = "red")+
- geom_line(col = "cyan4", lwd =  0.6)+
+geom_vline(xintercept = as.Date("2022-08-03"), lty = 2, col = "black")+
+  geom_vline(xintercept = as.Date("2022-07-29"), lty = 2, col = "red")+ geom_line(col = "cyan4", lwd =  0.6)+
   ylab(expression(Discharge~(m^3~s^-1)))+
   xlab(NULL) +                                  
   scale_x_date(date_breaks = "1 year",  date_labels = "",  expand = c(0, 0)) +   theme( axis.title.y = element_text(size = 9),
@@ -278,17 +284,17 @@ l <- ggplot(met.mle.final, aes(x = date, y = GHI.day, alpha = fire))+
   theme(legend.position = "null")+
    ylim (c(0,500)) +
    annotate("text",x = as.Date("2022-08-03"),
-           y = 380,label = "Before fire", hjust = 1.1,color = "red", size = 3, alpha = 0.7, fontface = "bold")+
+           y = 420,label = "Before fire &\ndebris flows", hjust = 1.1,color = "red", size = 3, alpha = 0.7, fontface = "bold")+
       annotate("text",x = as.Date("2022-08-03"),
-           y = 380,label = "After fire", hjust = -0.1,color = "red", size = 3, fontface = "bold")+
+           y = 420,label = "After fire &\ndebris flows", hjust = -0.1,color = "red", size = 3, fontface = "bold")+
 annotate("segment", x=as.Date("2022-07-15"), xend=as.Date("2021-09-01"), y=325, yend=325, arrow=arrow(length=unit(0.07,"inches"), ends="last", type="closed"), color="red", linewidth=0.8, alpha = 0.7)+
    annotate("segment", x=as.Date("2022-08-18"), xend=as.Date("2023-05-15"), y=325, yend=325, arrow=arrow(length=unit(0.07,"inches"), ends="last", type="closed"), color="red", linewidth=0.8)
   
  
 
 t <-  ggplot(met.mle.final, aes(x = date, y = turb_median, alpha = fire))+
-    geom_vline(xintercept = as.Date("2022-08-03"), lty = 2, col = "red")+
- geom_line(col = "chocolate4", lwd =  0.6)+
+geom_vline(xintercept = as.Date("2022-08-03"), lty = 2, col = "black")+
+  geom_vline(xintercept = as.Date("2022-07-29"), lty = 2, col = "red")+ geom_line(col = "chocolate4", lwd =  0.6)+
   ylab("Turbidity (FNU)")+
   scale_y_log10()+
    xlab(NULL) +                                  
@@ -301,8 +307,8 @@ t <-  ggplot(met.mle.final, aes(x = date, y = turb_median, alpha = fire))+
 
 gpp <-  
   ggplot(met.mle.final, aes(x = date, y = GPP, alpha = fire))+
-    geom_vline(xintercept = as.Date("2022-08-03"), lty = 2, col = "red")+
- geom_line(col = "forestgreen", lwd =  0.6)+
+geom_vline(xintercept = as.Date("2022-08-03"), lty = 2, col = "black")+
+  geom_vline(xintercept = as.Date("2022-07-29"), lty = 2, col = "red")+ geom_line(col = "forestgreen", lwd =  0.6)+
   ylab(expression(GPP~(g~O[2]~m^{-2}~d^{-1})))+
    xlab(NULL) +                                  
   scale_x_date(date_breaks = "1 year",  date_labels = "",  expand = c(0, 0)) +   theme( axis.title.y = element_text(size = 9),
@@ -313,8 +319,8 @@ gpp <-
  
 
 er <-  ggplot(met.mle.final, aes(x = date, y = ER, alpha = fire))+
-    geom_vline(xintercept = as.Date("2022-08-03"), lty = 2, col = "red")+
- geom_line(col = "chocolate", lwd =  0.6)+
+geom_vline(xintercept = as.Date("2022-08-03"), lty = 2, col = "black")+
+  geom_vline(xintercept = as.Date("2022-07-29"), lty = 2, col = "red")+ geom_line(col = "chocolate", lwd =  0.6)+
   ylab(expression(ER~(g~O[2]~m^{-2}~d^{-1})))+
    xlab(NULL) +                                  
   scale_x_date(date_breaks = "1 year",  date_labels = "",  expand = c(0, 0)) +   theme( axis.title.y = element_text(size = 9),
@@ -325,8 +331,8 @@ er <-  ggplot(met.mle.final, aes(x = date, y = ER, alpha = fire))+
  
 
 nep <-  ggplot(met.mle.final, aes(x = date, y = NEP, alpha = fire))+
-    geom_vline(xintercept = as.Date("2022-08-03"), lty = 2, col = "red")+
-  geom_hline(yintercept = 0, lty = 1, lwd = 0.2)+
+geom_vline(xintercept = as.Date("2022-08-03"), lty = 2, col = "black")+
+  geom_vline(xintercept = as.Date("2022-07-29"), lty = 2, col = "red")+  geom_hline(yintercept = 0, lty = 1, lwd = 0.2)+
  geom_line(col = "grey20", lwd = 0.6)+
   ylab(expression(NEP~(g~O[2]~m^{-2}~d^{-1})))+
    xlab(NULL) +                                  
@@ -438,6 +444,7 @@ e <- ggplot( df.e, aes(x = group, y = mean, alpha = group)) +
       axis.text.x = element_blank())
 
 df.n$group <- factor(df.n$group, levels = c("Before", "After"))
+
 n <- ggplot( df.n, aes(x = group, y = mean, alpha = group)) +
     geom_hline(yintercept = 0, lty = 1, lwd = 0.2)+
 
@@ -448,7 +455,9 @@ n <- ggplot( df.n, aes(x = group, y = mean, alpha = group)) +
   theme(legend.position = "null",
       axis.title.y = element_blank(),
       axis.title.x = element_blank())+
-  scale_y_continuous(limits = c(-3.2, 2.4))
+  scale_y_continuous(limits = c(-3.2, 2.4))+
+  annotate("text", x = 1, y = 0.2, label = "Autotrophic", vjust = 0, size = 2.5) +
+  annotate("text", x = 1.1, y = -0.2, label = "Heterotrophic", vjust = 1, size = 2.5)
 
 ms <- plot_grid(l, q, t, g, e, n, ncol = 1, align = "v", labels = c("g", "h", "i", "j", "k", "l"), label_x = 0.88, label_y = 0.999, rel_heights = c(1, 1, 1, 1, 1, 1.1))
 
@@ -457,7 +466,7 @@ ts.means <- plot_grid(ts, ms, ncol = 2, align = "v", rel_widths = c(0.75, 0.25))
 
 #pdf("Figures/Publication_Plots/F2-ts.pdf", height = 8, width = 6.5)
 ts.means
-dev.off()
+#dev.off()
 
 ```
 
@@ -730,9 +739,9 @@ si.met <- ggplot(met.mle.final, aes(x = jday, y = GPP))+
   xlab("Day of year")+ 
   ylab(expression(Metabolism~(g~O[2]~m^{-2}~d^{-1})))
 
-#pdf("Figures/Publication_Plots/SI_Metab.pdf", height = 6, width = 8)
+pdf("Figures/Publication_Plots/SI_Metab.pdf", height = 6, width = 8)
 plot_grid(si.met)
-#dev.off()
+dev.off()
 
 ```
 
@@ -741,35 +750,61 @@ plot_grid(si.met)
 
 2 wks before and 2 wks after fire
 
-```{r, warning=F, size = 'small', echo=FALSE, fig.width=5, fig.height=3}
+```{r, warning=F, size = 'small', echo=FALSE, fig.width=5, fig.height=7}
 
-si.met.fire.time.line <- met.mle.final.FIRE%>%
+met <- met.mle.final.FIRE%>%
   filter(date > "2022-07-15" & date < "2022-08-15")%>%
-  ggplot(aes(x = jday, y = GPP))+
-  geom_vline(xintercept = 210, lty = 2, lwd = 0.2, col="red")+
-  geom_vline(xintercept = 215, lty = 2, lwd = 0.2)+
+  ggplot(aes(x = date, y = GPP))+
+  geom_vline(xintercept = as.Date("2022-07-29"), lty = 2, lwd = 0.2, col="red")+
+  geom_vline(xintercept = as.Date("2022-08-03"), lty = 2, lwd = 0.2)+
   geom_abline(slope = 0, intercept = 0, width = 1, alpha = 0.6)+
   geom_point(col = "cyan4", alpha = 0.8)+
   geom_errorbar(aes(ymin = GPP.lower, ymax = GPP.upper), 
               alpha = 0.4, fill = "cyan4")+
-  geom_point(aes(x = jday, y = ER),
+  geom_point(aes(x = date, y = ER),
             col = "chocolate3", alpha = 0.8)+
   geom_errorbar(aes(ymin = ER.lower, ymax = ER.upper), 
               alpha = 0.4, fill = "chocolate3")+ 
-  geom_point(aes(x = jday, y = NEP),
+  geom_point(aes(x = date, y = NEP),
              alpha = 0.5, size = 0.6)+
-  facet_wrap(~year, ncol = 2)+
-  xlab("Day of year")+ 
+  xlab("")+ 
   ylab(expression(Metabolism~(g~O[2]~m^{-2}~d^{-1})))+
-  annotate("text", y=-50, x = 204.1, label = "Fire Start\nJuly 29 2022", 
-              size = 4,  col="red", hjust = 0, vjust = 0)+
-annotate("text", y=-40, x = 216, label = "Debris Flow\nAugust 3 2022", 
+  annotate("text", y=-50, x = as.Date("2022-07-29"), label = "Fire Start\n29 July 2022", 
+              size = 4,  col="red", hjust = 1.2, vjust = 0)+
+annotate("text", y=-50, x = as.Date("2022-08-04"), label = "Debris Flow\n03 August 2022", 
               size = 4,  col="black", hjust = 0, vjust = 0)+
   scale_y_continuous(breaks = c(20, 0, -20, -40, -60, -80))
 
-#pdf("Figures/Publication_Plots/SI_Metab.pdf", height = 4, width = 6)
-plot_grid(si.met.fire.time.line)
-#dev.off()
+
+tur <- hour.turb.all%>%
+  filter(solar.time > as.POSIXct("2022-07-15 18:00:00") & 
+           solar.time < as.POSIXct("2022-08-14 12:30:00"))%>%
+  ggplot(aes(x = solar.time, y = turb))+
+  geom_vline(xintercept = as.POSIXct("2022-07-29 8:15:00"), 
+           lty = 2, lwd = 0.2, col = "red") +
+geom_vline(xintercept = as.POSIXct("2022-08-03 05:30:00"), 
+           lty = 2, lwd = 0.2)+
+  geom_line(col = "chocolate4")+
+  xlab("")+ 
+  ylab("Turbidity (FNU)")+
+  scale_y_log10()
+
+do <- sub.day.do%>%
+  filter(datetime > as.POSIXct("2022-07-15 18:00:00") & 
+           datetime < as.POSIXct("2022-08-14 12:30:00"))%>%
+  ggplot(aes(x = datetime, y = DO.obs))+
+  geom_vline(xintercept = as.POSIXct("2022-07-29 8:15:00"), 
+           lty = 2, lwd = 0.2, col = "red") +
+geom_vline(xintercept = as.POSIXct("2022-08-03 05:30:00"), 
+           lty = 2, lwd = 0.2)+
+  geom_line(col = "skyblue")+
+  xlab("")+ 
+  ylab("Dissolved oxygen (mg/L)")
+
+
+pdf("Figures/Publication_Plots/SI_Metab_fire.pdf", height = 5.5, width = 6)
+plot_grid(met, tur, do, nrow = 3, rel_heights = c(.4, .3, .3))
+dev.off()
 
 
 
@@ -787,26 +822,40 @@ facet_labels <- met.mle.final %>%
     GPP = min(GPP, na.rm = TRUE) + 0.1 * diff(range(GPP, na.rm = TRUE)),
     ER = max(ER * -5, na.rm = TRUE) - 0.1 * diff(range(ER * -5, na.rm = TRUE)))
 
+xmax <- max(met.mle.final$GPP, na.rm = TRUE)
+
+poly_het <- data.frame(x = c(-2.7, xmax, xmax), y = c(-2.7, -2.7, xmax))
+
+label_df <- data.frame(
+  year = 2023,
+  label = c("Heterotrophic", "Autotrophic"),
+  x = c(Inf, -Inf),
+  y = c(Inf, -Inf))
+
 p1 <- met.mle.final %>%
   ggplot(aes(x = GPP, y = ER * -1, col = fire)) +
-  geom_point(size = 1, alpha = 0.6) +
-  geom_text( data = facet_labels,
-    aes(label = year),
-    x = -Inf, y = Inf,
-    hjust = -0.2, vjust = 1.5,
+  geom_polygon(data = poly_het,
+    aes(x = x, y = y),
     inherit.aes = FALSE,
-    size = 4.5) +
+    fill = "grey", alpha = 0.8) +
+  geom_point(size = 1, alpha = 0.6) +
+  geom_abline(intercept = 0, slope = 1) +
   facet_wrap(~year) +
   scale_color_viridis_d(option = "mako", begin = 0.7, end = 0.2) +
-  geom_abline(intercept = 0, slope = 1) +
-labs(
-  x = expression(GPP~(g~O[2]~m^{-2}~d^{-1})),
-  y = expression(abs(ER)~(g~O[2]~m^{-2}~d^{-1}))
-)+theme(legend.position = "none",
+  theme( legend.position = "none",
     strip.background = element_blank(),
     strip.text = element_blank(),
     panel.border = element_rect(colour = "black", fill = NA, linewidth = 0.4),
-    axis.line = element_line(colour = "black", linewidth = 0.4))
+    axis.line = element_line(colour = "black", linewidth = 0.4)) +
+ labs(
+    x = expression(GPP~(g~O[2]~m^{-2}~d^{-1})),
+    y = expression(abs(ER)~(g~O[2]~m^{-2}~d^{-1})))+
+geom_text(data = label_df,
+          aes(x = x, y = y, label = label),
+          inherit.aes = FALSE,
+          hjust = c(1.5, -0.8),
+          vjust = c(2, -2))
+
 
 p2 <- met.mle.final %>%
   mutate(fire = ifelse(fire == "Before", "Before fire", "After fire"))%>%
@@ -824,9 +873,9 @@ p2 <- met.mle.final %>%
   xlab(" ")
 
 
-#pdf("Figures/Publication_Plots/erXgpp.pdf")
+pdf("Figures/Publication_Plots/erXgpp.pdf")
 plot_grid(p1, p2, nrow = 2, rel_heights = c(0.65, 0.4))
-#dev.off() 
+dev.off() 
 
 
 ```
@@ -1273,7 +1322,7 @@ p1 <- met.mle.final %>%
   ggplot(aes(x = GPP, y = 100*min.DO, col = fire))+
   geom_hline(yintercept = 90, lty = 2)+
   geom_point(alpha = 0.5, size = 0.5)+
-  scale_color_viridis_d(option = "inferno", begin = 0.6, end = 0.3)+
+  scale_color_viridis_d(option = "inferno", begin = 0.3, end = 0.6)+
   stat_smooth(method = "lm", se = F)+
   scale_y_continuous(limits = c(75, 105), name = expression("Dissolved O"[2]*" (% Saturation)"))+
   theme(legend.position = "null")+
@@ -1283,7 +1332,7 @@ p2 <- met.mle.final %>%
   ggplot(aes(x = ER, y = 100*min.DO, col = fire))+
   geom_hline(yintercept =90, lty = 2)+
   geom_point(alpha = 0.5, size = 0.5)+
-  scale_color_viridis_d(option = "inferno", begin = 0.6, end = 0.3,
+  scale_color_viridis_d(option = "inferno", begin = 0.3, end = 0.6,
        labels = c("After" = "After fire","Before" = "Before fire"))+
   stat_smooth(method = "lm", se = F)+
   scale_y_continuous(limits = c(75, 105))+
@@ -1299,7 +1348,7 @@ p3 <- met.mle.final %>%
   geom_vline(xintercept = 0, lty = 2, lwd = .5)+
   geom_hline(yintercept = 90, lty = 2)+
   geom_point(alpha = 0.5, size = 0.5)+
-  scale_color_viridis_d(option = "inferno", begin = 0.6, end = 0.3)+
+  scale_color_viridis_d(option = "inferno", begin = 0.3, end = 0.6)+
   stat_smooth(method = "lm", se = F)+
   scale_y_continuous(limits = c(75, 105))+
   theme(legend.position = "null",
@@ -1307,15 +1356,53 @@ p3 <- met.mle.final %>%
          axis.text.y = element_blank())+
   xlab(expression(NEP~(g~O[2]~m^{-2}~d^{-1})))
 
-#pdf("Figures/Publication_Plots/DO_SAT.pdf", height = 2.5, width = 6.5)
+pdf("Figures/Publication_Plots/DO_SAT.pdf", height = 2.5, width = 6.5)
 plot_grid(p1, p2, p3, ncol = 3, rel_widths = c(.4, .34, .34))
-#dev.off() 
+dev.off() 
 ```
 
 
 
+```{r, warning=F, size = 'small', echo=FALSE, fig.width=6.5, fig.height=2.5}
+
+ig <- readNWISdv("11530500","00060","2010-01-01",Sys.Date()) %>%
+  rename(flow = X_00060_00003) %>%
+  mutate(date = as.Date(Date),
+         jday = yday(date),
+         year = year(date),
+         dam = ifelse(year < 2025, "dammed", "removed")) %>%
+  filter(jday %in% c(160:260))
 
 
+sv <- readNWISdv("11516530","00060","2010-01-01",Sys.Date()) %>%
+  rename(flow = X_00060_00003) %>%
+  mutate(date = as.Date(Date),
+         jday = yday(date),
+         year = year(date),
+         dam = ifelse(year < 2025, "dammed", "removed")) %>%
+  filter(jday %in% c(60:132))
 
+  
+  ggplot(ig, aes(x=jday, y = flow, alpha = dam, group = year))+
+  geom_line()+
+    scale_y_log10()
+  
+  
+  
+  
+  
+i <- ig %>% group_by(dam)%>%
+    summarize (cv = sd(flow) / mean(flow),
+               rbi = sum(abs(diff(flow))) / sum(flow))%>%
+  mutate(site = "IG")
+
+  
+sv %>% group_by(dam)%>%
+    summarize (cv = sd(flow) / mean(flow),
+               rbi = sum(abs(diff(flow))) / sum(flow))%>%
+  mutate(site = "SV")%>%
+  rbind(i)
+
+```
 
 
