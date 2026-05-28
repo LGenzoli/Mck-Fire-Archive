@@ -2,7 +2,7 @@
 
 This README outlines the scripts used to complete the analysis for:
 
-> **"Debris flows suppressed riverine metabolism following high-severity wildfire on the Klamath River, California"**
+> **"Debris flows suppressed riverine productivity and respiration following high-severity wildfire on the Klamath River, California"**
 
 ## Notes
 
